@@ -1,0 +1,695 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Japanese Flashcards (JLPT Vocab API)</title>
+  <style>
+    :root { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
+    body { margin: 0; background: #f6f7f9; color: #111; }
+    .app { max-width: 920px; margin: 0 auto; padding: 18px; }
+    .card { background: #fff; border-radius: 14px; padding: 18px; box-shadow: 0 6px 18px rgba(0,0,0,.08); }
+    h1 { margin: 6px 0 16px; font-size: 28px; }
+    h2 { margin: 0 0 10px; font-size: 18px; }
+    .row { display: flex; gap: 14px; flex-wrap: wrap; align-items: center; }
+    label { font-size: 14px; color: #333; }
+    input[type="number"], select, input[type="text"] {
+      font-size: 14px; padding: 10px 12px; border: 1px solid #d7dbe0; border-radius: 10px;
+      background: #fff; outline: none; min-width: 110px;
+    }
+    input[type="text"] { min-width: 240px; }
+    .radio-group { display: flex; gap: 10px; flex-wrap: wrap; }
+    .radio-pill {
+      display: inline-flex; align-items: center; gap: 8px;
+      border: 1px solid #d7dbe0; padding: 8px 10px; border-radius: 999px; background: #fff;
+      cursor: pointer; user-select: none;
+    }
+    .radio-pill input { margin: 0; }
+    .checkbox-pill {
+      display: inline-flex; align-items: center; gap: 8px;
+      border: 1px solid #d7dbe0; padding: 10px 12px; border-radius: 12px; background: #fff;
+    }
+    button {
+      border: 0; border-radius: 12px; padding: 12px 14px; font-size: 14px; cursor: pointer;
+      background: #1f6feb; color: #fff;
+    }
+    button.secondary { background: #2ea043; }
+    button.ghost { background: #eef2f7; color: #111; }
+    button:disabled { opacity: .55; cursor: not-allowed; }
+    .muted { color: #667085; font-size: 13px; }
+    .divider { height: 1px; background: #eef2f7; margin: 16px 0; }
+    .center { display: grid; place-items: center; }
+
+    .question {
+      font-family: "Hiragino Kaku Gothic ProN", "Hiragino Sans", "Yu Gothic", "Meiryo", "Noto Sans JP", system-ui, sans-serif;
+      font-size: 44px; font-weight: 700; letter-spacing: .5px; text-align: center; margin: 14px 0 6px;
+    }
+    .subquestion { text-align: center; font-size: 16px; margin-bottom: 6px; color: #333; }
+    .meaning { text-align: center; font-size: 14px; color: #667085; margin-bottom: 14px; }
+    .grid {
+      display: grid; gap: 12px;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    @media (max-width: 520px) { .grid { grid-template-columns: 1fr; } }
+    .choice {
+      border: 1px solid #d7dbe0; border-radius: 12px; padding: 14px 12px;
+      background: #fff; cursor: pointer; text-align: center;
+      font-family: "Hiragino Kaku Gothic ProN", "Hiragino Sans", "Yu Gothic", "Meiryo", "Noto Sans JP", system-ui, sans-serif;
+      font-size: 20px; user-select: none;
+    }
+    .choice.disabled { cursor: not-allowed; opacity: .8; }
+    .choice.correct { background: #16a34a; border-color: #16a34a; color: #fff; }
+    .choice.wrong { background: #dc2626; border-color: #dc2626; color: #fff; }
+    .feedback { text-align: center; font-size: 16px; margin: 10px 0 6px; min-height: 22px; }
+    .feedback.ok { color: #16a34a; }
+    .feedback.bad { color: #dc2626; }
+    .feedback.warn { color: #f59e0b; }
+    .meta { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-top: 8px; color: #667085; font-size: 13px; }
+    .countdown { text-align: center; font-size: 13px; color: #1f6feb; min-height: 18px; }
+
+    .scrollbox {
+      border: 1px solid #eef2f7; border-radius: 12px; background: #fff;
+      max-height: 260px; overflow: auto; padding: 10px;
+    }
+    .wordline { font-size: 14px; padding: 6px 2px; border-bottom: 1px dashed #eef2f7; }
+    .wordline:last-child { border-bottom: 0; }
+    .buttons-row { display: flex; gap: 10px; flex-wrap: wrap; }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <div id="root" class="card"></div>
+    <p class="muted" style="text-align:center;margin:14px 0 0;">
+      Source: jlpt-vocab-api.vercel.app
+    </p>
+  </div>
+
+<script>
+(() => {
+  const API_BASE = "https://jlpt-vocab-api.vercel.app";
+  const WRONG_POOL_KEY = "jp_flashcards_wrong_pool_v1";
+
+  const state = {
+    // settings
+    jlptLevel: 5,
+    numWords: 10,
+    reviewMode: "multiple_choice", // or "typing"
+    questionType: "hiragana_to_kanji", // or "kanji_to_hiragana"
+    maxAttempts: 3,
+
+    // wrong pool
+    wrongPool: [],
+    reviewWrongPool: false,
+    reviewedPoolKeysThisSession: [],
+
+    // session
+    vocabulary: [],
+    currentCards: [],
+    currentIndex: 0,
+    attempts: 0,
+    questionSolved: false,
+    countdownTimer: null,
+
+    // scoring
+    perfectFirstTry: 0,
+    correctAfterRetry: 0,
+    failedQuestions: 0,
+    incorrectWords: [], // strings for display
+    incorrectWordObjs: [], // objects for pool
+  };
+
+  const root = document.getElementById("root");
+
+  const el = (tag, attrs = {}, ...children) => {
+    const node = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs)) {
+      if (k === "class") node.className = v;
+      else if (k.startsWith("on") && typeof v === "function") node.addEventListener(k.slice(2).toLowerCase(), v);
+      else if (v !== null && v !== undefined) node.setAttribute(k, String(v));
+    }
+    for (const c of children) {
+      if (c === null || c === undefined) continue;
+      node.appendChild(typeof c === "string" ? document.createTextNode(c) : c);
+    }
+    return node;
+  };
+
+  // ----------------------------
+  // Wrong pool persistence
+  // ----------------------------
+  function wordKey(w) {
+    return `${(w.hiragana || "").trim()}|${(w.kanji || "").trim()}`;
+  }
+
+  function loadWrongPool() {
+    try {
+      const raw = localStorage.getItem(WRONG_POOL_KEY);
+      const arr = raw ? JSON.parse(raw) : [];
+      if (Array.isArray(arr)) return arr.filter(w => w && w.hiragana && w.kanji);
+      return [];
+    } catch {
+      return [];
+    }
+  }
+
+  function saveWrongPool(pool) {
+    localStorage.setItem(WRONG_POOL_KEY, JSON.stringify(pool));
+  }
+
+  function mergeIntoWrongPool(words) {
+    const map = new Map(state.wrongPool.map(w => [wordKey(w), w]));
+    for (const w of words) {
+      map.set(wordKey(w), w);
+    }
+    state.wrongPool = Array.from(map.values());
+    saveWrongPool(state.wrongPool);
+  }
+
+  function removeReviewedFromWrongPoolIfPerfect() {
+    // Only remove if user was reviewing wrong pool AND got 0 wrong
+    if (!state.reviewWrongPool) return;
+    if (state.incorrectWordObjs.length > 0) return;
+
+    const removeKeys = new Set(state.reviewedPoolKeysThisSession);
+    state.wrongPool = state.wrongPool.filter(w => !removeKeys.has(wordKey(w)));
+    saveWrongPool(state.wrongPool);
+  }
+
+  // ----------------------------
+  // Helpers
+  // ----------------------------
+  function shuffle(arr) {
+    const a = arr.slice();
+    for (let i = a.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [a[i], a[j]] = [a[j], a[i]];
+    }
+    return a;
+  }
+
+  function sample(arr, n) {
+    if (n >= arr.length) return shuffle(arr);
+    const copy = arr.slice();
+    const out = [];
+    for (let i = 0; i < n; i++) {
+      const idx = Math.floor(Math.random() * copy.length);
+      out.push(copy.splice(idx, 1)[0]);
+    }
+    return out;
+  }
+
+  function normalizeApiWord(w) {
+    let kanji = (w?.word ?? "").trim();
+    let hira = (w?.furigana ?? "").trim();
+    let meaning = (w?.meaning ?? "").trim();
+
+    if (!kanji && hira) kanji = hira;
+    if (!hira && kanji) hira = kanji;
+
+    return { hiragana: hira, kanji, meaning };
+  }
+
+  async function fetchVocab(level, limit, offset = 0) {
+    const url = new URL(API_BASE + "/api/words");
+    url.searchParams.set("level", String(level));
+    url.searchParams.set("limit", String(limit));
+    url.searchParams.set("offset", String(offset));
+
+    const resp = await fetch(url.toString(), { headers: { "Accept": "application/json" } });
+    if (!resp.ok) throw new Error(`API request failed: ${resp.status} ${resp.statusText}`);
+    const raw = await resp.json();
+
+    const words = Array.isArray(raw) ? raw : (raw?.words ?? raw?.data ?? []);
+    return words.map(normalizeApiWord).filter(v => v.hiragana && v.kanji);
+  }
+
+  function clearCountdown() {
+    if (state.countdownTimer) {
+      clearTimeout(state.countdownTimer);
+      state.countdownTimer = null;
+    }
+  }
+
+  function radioPill(label, name, value, checkedValue, onChange) {
+    const input = el("input", { type: "radio", name, value, ...(value === checkedValue ? { checked: "" } : {}) });
+    input.addEventListener("change", () => onChange(value));
+    return el("label", { class: "radio-pill" }, input, el("span", {}, label));
+  }
+
+  // ----------------------------
+  // UI: Setup
+  // ----------------------------
+  function renderSetup() {
+    clearCountdown();
+    state.wrongPool = loadWrongPool();
+
+    const wrongCount = state.wrongPool.length;
+    const wrongLabel = wrongCount
+      ? `Review wrong-word pool (${wrongCount} words)`
+      : `Review wrong-word pool (empty)`;
+
+    root.replaceChildren(
+      el("h1", {}, "Japanese Flashcard Program"),
+      el("div", { class: "divider" }),
+
+      el("div", { class: "row" },
+        el("label", {}, "JLPT Level:"),
+        (() => {
+          const sel = el("select", { id: "jlptLevel" },
+            ...[5,4,3,2,1].map(n => el("option", { value: n, selected: n === state.jlptLevel ? "" : null }, `N${n}`))
+          );
+          sel.addEventListener("change", () => { state.jlptLevel = Number(sel.value); });
+          return sel;
+        })(),
+
+        el("label", { style: "margin-left:10px" }, "Number of words:"),
+        (() => {
+          const inp = el("input", { type: "number", min: "1", value: String(state.numWords), style: "width:110px" });
+          inp.addEventListener("input", () => { state.numWords = Math.max(1, Number(inp.value || 1)); });
+          return inp;
+        })(),
+      ),
+
+      el("div", { style: "margin-top:12px" },
+        (() => {
+          const wrap = el("label", { class: "checkbox-pill" });
+          const cb = el("input", { type: "checkbox", id: "reviewWrongPool" });
+          cb.checked = !!state.reviewWrongPool;
+          cb.disabled = wrongCount === 0;
+          cb.addEventListener("change", () => { state.reviewWrongPool = cb.checked; });
+          wrap.append(cb, el("span", {}, wrongLabel));
+          return wrap;
+        })(),
+        el("div", { class: "muted", style: "margin-top:6px" },
+          "If you finish a wrong-pool review with 0 wrong, those words are removed from the pool."
+        )
+      ),
+
+      el("div", { class: "divider" }),
+
+      el("h2", {}, "Review Mode"),
+      el("div", { class: "radio-group" },
+        radioPill("Multiple Choice", "reviewMode", "multiple_choice", state.reviewMode, v => state.reviewMode = v),
+        radioPill("Typing Practice", "reviewMode", "typing", state.reviewMode, v => state.reviewMode = v),
+      ),
+
+      el("div", { class: "divider" }),
+
+      el("h2", {}, "Question Type"),
+      el("div", { class: "radio-group" },
+        radioPill("Hiragana → Kanji", "questionType", "hiragana_to_kanji", state.questionType, v => state.questionType = v),
+        radioPill("Kanji → Hiragana", "questionType", "kanji_to_hiragana", state.questionType, v => state.questionType = v),
+      ),
+
+      el("div", { class: "divider" }),
+
+      el("div", { class: "row" },
+        el("button", { class: "secondary", onclick: startReview }, "Start Review"),
+        // el("span", { class: "muted" }, state.reviewWrongPool ? "Using wrong-word pool." : "Loads a fresh word set from the API.")
+      )
+    );
+  }
+
+  // ----------------------------
+  // Start + Session setup
+  // ----------------------------
+  async function startReview() {
+    clearCountdown();
+
+    const num = Math.max(1, Number(state.numWords || 1));
+    const lvl = Number(state.jlptLevel);
+
+    // reset scoring/session bookkeeping
+    state.currentIndex = 0;
+    state.attempts = 0;
+    state.questionSolved = false;
+    state.perfectFirstTry = 0;
+    state.correctAfterRetry = 0;
+    state.failedQuestions = 0;
+    state.incorrectWords = [];
+    state.incorrectWordObjs = [];
+    state.reviewedPoolKeysThisSession = [];
+
+    // Loading UI
+    root.replaceChildren(
+      el("h1", {}, "Loading..."),
+      el("p", { class: "muted" }, state.reviewWrongPool ? "Preparing wrong-word pool review…" : "Fetching vocabulary from the API…")
+    );
+
+    try {
+      if (state.reviewWrongPool) {
+        // Use wrong pool as the study set
+        state.wrongPool = loadWrongPool();
+        if (!state.wrongPool.length) throw new Error("Wrong-word pool is empty.");
+
+        const setSize = Math.min(num, state.wrongPool.length);
+        state.currentCards = sample(state.wrongPool, setSize);
+
+        // Track which pool entries were reviewed in this session
+        state.reviewedPoolKeysThisSession = state.currentCards.map(wordKey);
+
+        // For distractors, we want a decent vocabulary pool.
+        // Use wrongPool + (optional) small API fetch if pool is tiny.
+        state.vocabulary = state.wrongPool.slice();
+
+        if (state.vocabulary.length < 10) {
+          // top up distractors lightly
+          const extra = await fetchVocab(lvl, 30, 0);
+          const merged = new Map(state.vocabulary.map(w => [wordKey(w), w]));
+          for (const w of extra) merged.set(wordKey(w), w);
+          state.vocabulary = Array.from(merged.values());
+        }
+      } else {
+        // Use API as the study set
+        const fetchLimit = Math.max(num, 40);
+        const vocab = await fetchVocab(lvl, fetchLimit, 0);
+        if (!vocab.length) throw new Error("API returned no words for that level.");
+        if (num > vocab.length) throw new Error(`Only ${vocab.length} words available from API right now.`);
+
+        state.vocabulary = vocab;
+        state.currentCards = sample(vocab, num);
+      }
+
+      renderFlashcard();
+    } catch (err) {
+      root.replaceChildren(
+        el("h1", {}, "Error"),
+        el("p", {}, String(err?.message || err)),
+        el("div", { class: "buttons-row" },
+          el("button", { class: "ghost", onclick: renderSetup }, "Back"),
+          el("button", { class: "secondary", onclick: startReview }, "Retry")
+        )
+      );
+    }
+  }
+
+  function getAnswerChoices(correctAnswer, answerType) {
+    const choices = [correctAnswer];
+    const otherItems = [];
+    for (const item of state.vocabulary) {
+      const v = item[answerType];
+      if (v && v !== correctAnswer) otherItems.push(v);
+    }
+    const unique = Array.from(new Set(otherItems));
+    let distractors;
+    if (unique.length >= 3) distractors = sample(unique, 3);
+    else {
+      distractors = unique.slice();
+      while (distractors.length < 3) distractors.push("---");
+    }
+    return shuffle(choices.concat(distractors));
+  }
+
+  // ----------------------------
+  // Quiz rendering
+  // ----------------------------
+  function renderFlashcard() {
+    clearCountdown();
+
+    if (state.currentIndex >= state.currentCards.length) {
+      renderResults();
+      return;
+    }
+
+    const card = state.currentCards[state.currentIndex];
+    state.attempts = 0;
+    state.questionSolved = false;
+
+    const isH2K = state.questionType === "hiragana_to_kanji";
+    const questionText = isH2K ? card.hiragana : card.kanji;
+    const correctAnswer = isH2K ? card.kanji : card.hiragana;
+    const answerType = isH2K ? "kanji" : "hiragana";
+
+    const feedback = el("div", { class: "feedback", id: "feedback" }, "");
+    const attemptsLabel = el("div", { class: "muted", id: "attempts" }, `Attempts: ${state.attempts}/${state.maxAttempts}`);
+    const countdown = el("div", { class: "countdown", id: "countdown" }, "");
+
+    const header = el("div", {},
+      el("div", { class: "subquestion" }, isH2K ? "Hiragana:" : "Kanji:"),
+      el("div", { class: "question" }, questionText),
+      el("div", { class: "meaning" }, `Meaning: ${card.meaning || ""}`),
+      feedback,
+      attemptsLabel,
+      countdown,
+      el("div", { class: "meta" },
+        el("div", {}, `Card ${state.currentIndex + 1} of ${state.currentCards.length}`),
+        el("div", {}, `Mode: ${state.reviewMode === "multiple_choice" ? "Multiple Choice" : "Typing"} • ${state.reviewWrongPool ? "Wrong Pool" : ("N" + state.jlptLevel)}`)
+      )
+    );
+
+    let body;
+    if (state.reviewMode === "multiple_choice") {
+      const choices = getAnswerChoices(correctAnswer, answerType);
+      body = el("div", { class: "grid", id: "grid" },
+        ...choices.map(choice => el("div", {
+          class: "choice",
+          onclick: () => checkMultipleChoice(choice, correctAnswer)
+        }, choice))
+      );
+    } else {
+      const inp = el("input", { type: "text", id: "answerInput", placeholder: "Type your answer…" });
+      const submit = el("button", { onclick: () => checkTyping(correctAnswer) }, "Submit Answer");
+      body = el("div", { class: "center", style: "gap:12px" },
+        inp,
+        submit,
+        el("div", { class: "muted", style: "margin-top:8px;text-align:center" },
+          "Tip: Use a Japanese IME for kana/kanji input if needed."
+        )
+      );
+      setTimeout(() => {
+        inp.focus();
+        inp.addEventListener("keydown", (e) => { if (e.key === "Enter") checkTyping(correctAnswer); });
+      }, 0);
+    }
+
+    root.replaceChildren(
+      el("h1", {}, "Japanese Flashcard Program"),
+      el("div", { class: "divider" }),
+      header,
+      el("div", { class: "divider" }),
+      body,
+      el("div", { class: "divider" }),
+      el("div", { class: "buttons-row" },
+        el("button", { class: "ghost", onclick: renderSetup }, "Back to Setup")
+      )
+    );
+  }
+
+  function lockChoices() {
+    const nodes = root.querySelectorAll(".choice");
+    nodes.forEach(n => {
+      n.classList.add("disabled");
+      n.style.pointerEvents = "none";
+    });
+  }
+
+  function highlightChoices(selected, correct) {
+    const nodes = Array.from(root.querySelectorAll(".choice"));
+    for (const n of nodes) {
+      const txt = n.textContent;
+      if (txt === correct) n.classList.add("correct");
+      if (txt === selected && selected !== correct) n.classList.add("wrong");
+    }
+  }
+
+  function autoNextCard(countdownSeconds = 3) {
+    const cd = root.querySelector("#countdown");
+    if (!cd) return;
+
+    function tick(sec) {
+      if (sec > 0) {
+        cd.textContent = `Next card in ${sec}…`;
+        state.countdownTimer = setTimeout(() => tick(sec - 1), 500);
+      } else {
+        cd.textContent = "";
+        state.currentIndex += 1;
+        renderFlashcard();
+      }
+    }
+    tick(countdownSeconds);
+  }
+
+  // ----------------------------
+  // Answer checking
+  // ----------------------------
+  function recordWrongCurrentCard() {
+    const c = state.currentCards[state.currentIndex];
+    const entryStr = `${c.hiragana} (${c.kanji}) - ${c.meaning || ""}`;
+    if (!state.incorrectWords.includes(entryStr)) state.incorrectWords.push(entryStr);
+
+    const obj = { hiragana: c.hiragana, kanji: c.kanji, meaning: c.meaning || "" };
+    if (!state.incorrectWordObjs.some(x => wordKey(x) === wordKey(obj))) state.incorrectWordObjs.push(obj);
+  }
+
+  function checkMultipleChoice(selected, correct) {
+    if (state.questionSolved) return;
+
+    state.attempts += 1;
+    const attemptsLabel = root.querySelector("#attempts");
+    if (attemptsLabel) attemptsLabel.textContent = `Attempts: ${state.attempts}/${state.maxAttempts}`;
+
+    const feedback = root.querySelector("#feedback");
+
+    if (selected === correct) {
+      if (feedback) { feedback.textContent = "✓ Correct!"; feedback.className = "feedback ok"; }
+      highlightChoices(selected, correct);
+      lockChoices();
+
+      if (state.attempts === 1) state.perfectFirstTry += 1;
+      else state.correctAfterRetry += 1;
+
+      state.questionSolved = true;
+      autoNextCard(3);
+      return;
+    }
+
+    if (feedback) { feedback.textContent = "✗ Incorrect!"; feedback.className = "feedback bad"; }
+
+    // disable only selected choice
+    const nodes = Array.from(root.querySelectorAll(".choice"));
+    for (const n of nodes) {
+      if (n.textContent === selected) {
+        n.classList.add("wrong", "disabled");
+        n.style.pointerEvents = "none";
+      }
+    }
+
+    if (state.attempts >= state.maxAttempts) {
+      if (feedback) { feedback.textContent = `✗ The correct answer is: ${correct}`; feedback.className = "feedback warn"; }
+      highlightChoices(selected, correct);
+      lockChoices();
+
+      recordWrongCurrentCard();
+      state.failedQuestions += 1;
+      state.questionSolved = true;
+      autoNextCard(3);
+    }
+  }
+
+  function checkTyping(correct) {
+    if (state.reviewMode !== "typing" || state.questionSolved) return;
+
+    const inp = root.querySelector("#answerInput");
+    if (!inp) return;
+
+    const user = (inp.value || "").trim();
+    if (!user) return;
+
+    state.attempts += 1;
+    const attemptsLabel = root.querySelector("#attempts");
+    if (attemptsLabel) attemptsLabel.textContent = `Attempts: ${state.attempts}/${state.maxAttempts}`;
+
+    const feedback = root.querySelector("#feedback");
+
+    if (user === correct) {
+      if (feedback) { feedback.textContent = "✓ Correct!"; feedback.className = "feedback ok"; }
+      inp.style.background = "#dcfce7";
+      inp.style.borderColor = "#16a34a";
+      inp.disabled = true;
+
+      if (state.attempts === 1) state.perfectFirstTry += 1;
+      else state.correctAfterRetry += 1;
+
+      state.questionSolved = true;
+      autoNextCard(3);
+      return;
+    }
+
+    if (feedback) { feedback.textContent = "✗ Incorrect!"; feedback.className = "feedback bad"; }
+    inp.style.background = "#fee2e2";
+    inp.style.borderColor = "#dc2626";
+    inp.value = "";
+
+    if (state.attempts >= state.maxAttempts) {
+      if (feedback) { feedback.textContent = `✗ The correct answer is: ${correct}`; feedback.className = "feedback warn"; }
+      inp.disabled = true;
+      inp.value = correct;
+      inp.style.background = "#fef3c7";
+      inp.style.borderColor = "#f59e0b";
+
+      recordWrongCurrentCard();
+      state.failedQuestions += 1;
+      state.questionSolved = true;
+      autoNextCard(3);
+    }
+  }
+
+  // ----------------------------
+  // Results
+  // ----------------------------
+  function renderResults() {
+    clearCountdown();
+
+    const total = state.currentCards.length;
+    const correct = state.perfectFirstTry + state.correctAfterRetry;
+    const accuracy = total ? (correct / total) * 100 : 0;
+    const firstTryAccuracy = total ? (state.perfectFirstTry / total) * 100 : 0;
+
+    // ✅ Add incorrect words into wrong pool (normal sessions + wrong-pool sessions)
+    if (state.incorrectWordObjs.length > 0) {
+      mergeIntoWrongPool(state.incorrectWordObjs);
+    }
+
+    // ✅ If reviewing wrong pool and got ALL correct, remove reviewed words from pool
+    removeReviewedFromWrongPoolIfPerfect();
+
+    const details = el("div", {},
+      el("div", { class: "muted" }, `• Perfect (1st try): ${state.perfectFirstTry}`),
+      el("div", { class: "muted" }, `• Correct after retry: ${state.correctAfterRetry}`),
+      el("div", { class: "muted" }, `• Failed: ${state.failedQuestions}`),
+      el("div", { class: "muted", style: "margin-top:8px" }, `First Try Accuracy: ${firstTryAccuracy.toFixed(1)}%`),
+      el("div", { class: "muted" },
+        `Mode: ${state.reviewMode === "multiple_choice" ? "Multiple Choice" : "Typing"} | ` +
+        `Question Type: ${state.questionType.replaceAll("_", " ")} | ` +
+        `Session: ${state.reviewWrongPool ? "Wrong Pool" : ("N" + state.jlptLevel)}`
+      ),
+      el("div", { class: "muted", style: "margin-top:8px" },
+        `Wrong-word pool size now: ${loadWrongPool().length}`
+      )
+    );
+
+    let listSection;
+    if (state.incorrectWords.length) {
+      listSection = el("div", {},
+        el("h2", {}, "Words to review (added to wrong-word pool)"),
+        el("div", { class: "scrollbox" },
+          ...state.incorrectWords.map((w, i) => el("div", { class: "wordline" }, `${i + 1}. ${w}`))
+        )
+      );
+    } else {
+      listSection = el("div", { class: "center" },
+        el("h2", {}, "Perfect score!"),
+        el("p", { class: "muted" },
+          state.reviewWrongPool
+            ? "You cleared this wrong-word set — reviewed words were removed from the wrong-word pool."
+            : "All answers correct."
+        )
+      );
+    }
+
+    // ✅ Only ONE button now: Restart Program
+    root.replaceChildren(
+      el("h1", {}, "Review Complete!"),
+      el("div", { class: "divider" }),
+      el("div", {},
+        el("div", { style: "font-size:18px;font-weight:700" },
+          `Final Score: ${accuracy.toFixed(1)}% (${correct}/${total})`
+        ),
+        el("div", { style: "margin-top:10px" }, details)
+      ),
+      el("div", { class: "divider" }),
+      listSection,
+      el("div", { class: "divider" }),
+      el("div", { class: "buttons-row" },
+        el("button", { class: "secondary", onclick: () => { state.reviewWrongPool = false; renderSetup(); } }, "Restart Program")
+      )
+    );
+  }
+
+  // init
+  state.wrongPool = loadWrongPool();
+  renderSetup();
+})();
+</script>
+</body>
+</html>
