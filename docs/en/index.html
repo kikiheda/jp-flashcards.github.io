@@ -3,10 +3,11 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Japanese Flashcards (JLPT Vocab API)</title>
+  <title>Japanese Flashcards</title>
   <style>
     :root { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
     body { margin: 0; background: #f6f7f9; color: #111; }
+    header { max-width: 920px; margin: 0 auto; padding: 14px 18px 0; }
     .app { max-width: 920px; margin: 0 auto; padding: 18px; }
     .card { background: #fff; border-radius: 14px; padding: 18px; box-shadow: 0 6px 18px rgba(0,0,0,.08); }
     h1 { margin: 6px 0 16px; font-size: 28px; }
@@ -75,7 +76,12 @@
     .buttons-row { display: flex; gap: 10px; flex-wrap: wrap; }
   </style>
 </head>
+
 <body>
+  <header>
+    <button id="langBtn" class="ghost">中文</button>
+  </header>
+
   <div class="app">
     <div id="root" class="card"></div>
     <p class="muted" style="text-align:center;margin:14px 0 0;">
@@ -86,6 +92,21 @@
 <script>
 (() => {
   const API_BASE = "https://jlpt-vocab-api.vercel.app";
+
+  // ===== Language switch (assumes /en/ and /zh/ folders) =====
+  const langBtn = document.getElementById("langBtn");
+  if (langBtn) {
+    langBtn.addEventListener("click", () => {
+      const path = window.location.pathname;
+      // If currently in /en/, jump to /zh/. Otherwise, just go up one and into zh/
+      if (path.includes("/en/")) {
+        window.location.href = path.replace("/en/", "/zh/");
+      } else {
+        const base = path.endsWith("/") ? path : (path + "/");
+        window.location.href = base.replace(/\/$/, "") + "/zh/";
+      }
+    });
+  }
 
   const state = {
     // settings
@@ -148,12 +169,10 @@
   }
 
   function normalizeApiWord(w) {
-    // API commonly returns: { word, furigana, meaning, level, ... }
     let kanji = (w?.word ?? "").trim();
     let hira = (w?.furigana ?? "").trim();
     let meaning = (w?.meaning ?? "").trim();
 
-    // handle kana-only entries
     if (!kanji && hira) kanji = hira;
     if (!hira && kanji) hira = kanji;
 
@@ -185,8 +204,9 @@
   function renderSetup() {
     clearCountdown();
     root.replaceChildren(
-      el("h1", {}, "Japanese Flashcard Program"),
+      el("h1", {}, "Japanese Flashcards"),
       el("div", { class: "divider" }),
+
       el("div", { class: "row" },
         el("label", {}, "JLPT Level:"),
         (() => {
@@ -196,6 +216,7 @@
           sel.addEventListener("change", () => { state.jlptLevel = Number(sel.value); });
           return sel;
         })(),
+
         el("label", { style: { marginLeft: "10px" } }, "Number of words:"),
         (() => {
           const inp = el("input", { type: "number", min: "1", value: String(state.numWords), style: { width: "110px" }});
@@ -203,6 +224,7 @@
           return inp;
         })(),
       ),
+
       el("div", { class: "divider" }),
 
       el("h2", {}, "Review Mode"),
@@ -231,8 +253,7 @@
   function radioPill(label, name, value, checkedValue, onChange) {
     const input = el("input", { type: "radio", name, value, ...(value === checkedValue ? { checked: "" } : {}) });
     input.addEventListener("change", () => onChange(value));
-    const pill = el("label", { class: "radio-pill" }, input, el("span", {}, label));
-    return pill;
+    return el("label", { class: "radio-pill" }, input, el("span", {}, label));
   }
 
   async function startReview() {
@@ -241,14 +262,13 @@
     const num = Math.max(1, Number(state.numWords || 1));
     const lvl = Number(state.jlptLevel);
 
-    // show loading UI
     root.replaceChildren(
       el("h1", {}, "Loading..."),
       el("p", { class: "muted" }, "Fetching vocabulary from the API.")
     );
 
     try {
-      const fetchLimit = Math.max(num, 40); // extra for distractors
+      const fetchLimit = Math.max(num, 40);
       const vocab = await fetchVocab(lvl, fetchLimit, 0);
       if (!vocab.length) throw new Error("API returned no words for that level.");
 
@@ -260,7 +280,6 @@
       state.currentCards = sample(vocab, num);
       state.currentIndex = 0;
 
-      // reset scoring
       state.attempts = 0;
       state.questionSolved = false;
       state.perfectFirstTry = 0;
@@ -288,12 +307,10 @@
       const v = item[answerType];
       if (v && v !== correctAnswer) otherItems.push(v);
     }
-    // unique
     const unique = Array.from(new Set(otherItems));
     let distractors;
-    if (unique.length >= 3) {
-      distractors = sample(unique, 3);
-    } else {
+    if (unique.length >= 3) distractors = sample(unique, 3);
+    else {
       distractors = unique.slice();
       while (distractors.length < 3) distractors.push("---");
     }
@@ -337,13 +354,12 @@
     let body;
     if (state.reviewMode === "multiple_choice") {
       const choices = getAnswerChoices(correctAnswer, answerType);
-      const grid = el("div", { class: "grid", id: "grid" },
+      body = el("div", { class: "grid", id: "grid" },
         ...choices.map(choice => el("div", {
           class: "choice",
           onclick: () => checkMultipleChoice(choice, correctAnswer)
         }, choice))
       );
-      body = grid;
     } else {
       const inp = el("input", { type: "text", id: "answerInput", placeholder: "Type your answer…" });
       const submit = el("button", { onclick: () => checkTyping(correctAnswer) }, "Submit Answer");
@@ -355,7 +371,6 @@
         )
       );
 
-      // enter key submit
       setTimeout(() => {
         inp.focus();
         inp.addEventListener("keydown", (e) => {
@@ -367,7 +382,7 @@
     }
 
     root.replaceChildren(
-      el("h1", {}, "Japanese Flashcard Program"),
+      el("h1", {}, "Japanese Flashcards"),
       el("div", { class: "divider" }),
       header,
       el("div", { class: "divider" }),
@@ -403,7 +418,7 @@
     function tick(sec) {
       if (sec > 0) {
         cd.textContent = `Next card in ${sec}…`;
-        state.countdownTimer = setTimeout(() => tick(sec - 1), 500);
+        state.countdownTimer = setTimeout(() => tick(sec - 1), 1000); // FIX: 1 second
       } else {
         cd.textContent = "";
         state.currentIndex += 1;
@@ -439,13 +454,11 @@
       return;
     }
 
-    // incorrect
     if (feedback) {
       feedback.textContent = "✗ Incorrect!";
       feedback.className = "feedback bad";
     }
 
-    // disable only selected choice (like your Tk version)
     const nodes = Array.from(root.querySelectorAll(".choice"));
     for (const n of nodes) {
       if (n.textContent === selected) {
@@ -454,7 +467,6 @@
       }
     }
 
-    // if max attempts reached
     if (state.attempts >= state.maxAttempts) {
       if (feedback) {
         feedback.textContent = `✗ The correct answer is: ${correct}`;
@@ -506,7 +518,6 @@
       return;
     }
 
-    // incorrect
     if (feedback) {
       feedback.textContent = "✗ Incorrect!";
       feedback.className = "feedback bad";
@@ -548,7 +559,7 @@
       el("div", { class: "muted" }, `• Correct after retry: ${state.correctAfterRetry}`),
       el("div", { class: "muted" }, `• Failed: ${state.failedQuestions}`),
       el("div", { class: "muted", style: { marginTop: "8px" } }, `First Try Accuracy: ${firstTryAccuracy.toFixed(1)}%`),
-      el("div", { class: "muted" }, `Mode: ${state.reviewMode === "multiple_choice" ? "Multiple Choice" : "Typing"} | Question Type: ${state.questionType.replaceAll("_", " ")}`),
+      el("div", { class: "muted" }, `Mode: ${state.reviewMode === "multiple_choice" ? "Multiple Choice" : "Typing"} | Question Type: ${state.questionType === "furigana_to_kanji" ? "Furigana→Kanji" : "Kanji→Furigana"}`),
     );
 
     let listSection;
@@ -580,12 +591,10 @@
       el("div", { class: "divider" }),
       el("div", { class: "buttons-row" },
         el("button", { class: "secondary", onclick: renderSetup }, "Restart Program"),
-        // el("button", { class: "orange", onclick: renderSetup }, "Try Different Mode"),
       )
     );
   }
 
-  // init
   renderSetup();
 })();
 </script>
